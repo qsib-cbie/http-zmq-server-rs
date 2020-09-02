@@ -1,0 +1,14 @@
+[package]
+name = "ws_tool"
+version = "0.1.0"
+authors = ["Jacob Trueb <jtrueb@northwestern.edu>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+actix = "0.9"
+actix-web = "2.0"
+actix-rt = "1.0"
+actix-web-actors = "2.0"
+zmq = "0.9"

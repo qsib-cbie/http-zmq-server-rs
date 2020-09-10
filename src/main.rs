@@ -1,7 +1,6 @@
-use actix::{Actor, StreamHandler};
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
-use actix_web_actors::ws;
-use actix_web_actors::ws::WebsocketContext;
+use actix_web::{web, http, App, HttpResponse, HttpServer, Responder};
+use actix_web::post;
+use actix_cors::Cors;
 use std::str;
 
 enum CliError {
@@ -20,115 +19,81 @@ impl std::convert::From<CliError> for actix_web::Error {
     }
 }
 
-/// Define http actor with connected zmq socket (and context)
-struct WsZmqActor {
-    zmq_req_dealer: zmq::Socket,
-    _zmq_ctx: zmq::Context,
+struct AppState {
+    _foo: String,
 }
 
-impl WsZmqActor {
-    pub fn new(endpoint: &str) -> Result<WsZmqActor, CliError> {
-        let ctx = zmq::Context::new();
-
-        let req_dealer= ctx.socket(zmq::DEALER)?;
-        req_dealer.connect(endpoint)?;
-
-        Ok(WsZmqActor {
-            zmq_req_dealer: req_dealer,
-            _zmq_ctx: ctx,
-        })
-    }
-
-    fn _forward_message(&mut self, request_string: &str) -> Result<(), zmq::Error> {
-        // Send the request
-        self.zmq_req_dealer.send(&vec![], zmq::SNDMORE)?;        // Simulated REQ: Empty Frame
-        self.zmq_req_dealer.send(request_string.as_bytes(), 0)?; // Simulated REQ: Message Content
-        Ok(())
-    }
-
-    fn _receive_message(&mut self) -> Result<Vec<u8>, zmq::Error> {
-        // Send the request
-        if self.zmq_req_dealer.poll(zmq::POLLIN, 10000)? == 0 {
-            return Ok(vec![]);
-        }
-
-        let _ = self.zmq_req_dealer.recv_bytes(0)?;                    // Simulated REQ: Empty Frame
-        let msg = self.zmq_req_dealer.recv_bytes(0)?;         // Simulated REQ: Message Content
-        return Ok(msg)
-
-    }
+fn try_connect(zmq_ctx: &zmq::Context) -> Result<zmq::Socket, zmq::Error> {
+    let zmq_req_dealer = zmq_ctx.socket(zmq::DEALER)?;
+    zmq_req_dealer.connect("tcp://ubuntu20:6000")?;
+    Ok(zmq_req_dealer)
 }
 
-impl Actor for WsZmqActor {
-    type Context = WebsocketContext<Self>;
-}
+fn try_hit_service(request_string: String) -> Result<std::vec::Vec<u8>, zmq::Error> {
+    // Establish a connection
+    let ctx = zmq::Context::new();
+    let sckt = try_connect(&ctx)?;
 
-/// Handler for ws::Message message
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsZmqActor {
-    fn handle(
-        &mut self,
-        msg: Result<ws::Message, ws::ProtocolError>,
-        ctx: &mut Self::Context,
-    ) {
-        match msg {
-            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
-            Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
-            Ok(ws::Message::Text(text)) => {
-                // Try find response
-                if text == "poll" {
-                    // Request is sent, Wait for the Response
-                    let resp = match self._receive_message() {
-                        Ok(msg) => {
-                            msg
-                        },
-                        Err(err) => {
-                            println!("Failed to receive response to foward: {}", err.to_string());
-                            return;
-                        }
-                    };
+    // Send the request
+    sckt.send(&vec![], zmq::SNDMORE)?;        // Simulated REQ: Empty Frame
+    sckt.send(request_string.as_bytes(), 0)?; // Simulated REQ: Message Content
 
-                    // Send the response if there was one
-                    println!("Found response: {}", String::from(str::from_utf8(resp.as_slice()).unwrap_or("!!! E R R O R !!!")));
-                    if resp.len() > 0 {
-                        let string = String::from_utf8(resp);
-                        if string.is_ok() {
-                            ctx.text(string.unwrap().as_str());
-                        }
-                    }
-                } else {
-                    // Send the message
-                    println!("Found Request: {}", text);
-                    match self._forward_message(text.as_str()) {
-                        Ok(_) => { },
-                        Err(err) => {
-                            // Swallowing ZMQ forwarding error
-                            println!("Failed to forward: {} due to: {}", &text, err);
-                            return;
-                        }
-                    }
-                }
+    if sckt.poll(zmq::POLLIN, 0)? != 0 {
+        println!("Sent message with pending input ...");
+    }
+
+    // Receive the request
+    let mut i = 0;
+    loop {
+        if sckt.poll(zmq::POLLIN, 1000)? == 0 {
+            i += 1;
+            if i == 10 {
+                return Ok(vec![]);
             }
-            _ => (),
+            println!("Waiting on poll {} ...", i);
+        } else {
+            break;
         }
     }
+
+    let _ = sckt.recv_bytes(0)?;    // Simulated REQ: Empty Frame
+    Ok(sckt.recv_bytes(0)?)         // Simulated REQ: Message Content
 }
 
-async fn index(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, actix_web::Error> {
-    let connector = match WsZmqActor::new("tcp://ubuntu20:6000") {
-        Ok(connector) => connector,
+#[post("/api_index")]
+async fn api_index(bytes: web::Bytes, data: web::Data<AppState>) -> impl Responder {
+    println!("Request: {:#?}", bytes);
+
+    let msg = match try_hit_service(String::from_utf8(bytes.to_vec()).unwrap()) {
+        Ok(zmq_req_dealer) => {
+            zmq_req_dealer
+        },
         Err(err) => {
-            return Err(std::convert::From::from(err));
+            println!("Failed to connect backend socket: {:#?}", err);
+            return HttpResponse::InternalServerError().body("Internal network failure");
         }
     };
-    let resp = ws::start(connector, &req, stream);
-    println!("{:?}", resp);
-    resp
+
+
+    println!("Response: {:?}", str::from_utf8(msg.as_slice()));
+    HttpResponse::Ok().body(msg)
 }
 
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
-    // Run a WS server
-    HttpServer::new(|| App::new().route("/ws/", web::get().to(index)))
+    // Run an HTTP server
+    HttpServer::new(|| App::new()
+            .wrap(
+                Cors::new() // <- Construct CORS middleware builder
+                  .allowed_origin("*")
+                  .allowed_origin("http://localhost:3000")
+                  .allowed_methods(vec!["GET", "POST"])
+                  .allowed_headers(vec![http::header::AUTHORIZATION, http::header::ACCEPT])
+                  .allowed_header(http::header::CONTENT_TYPE)
+                  .max_age(3600)
+                  .finish())
+            .data(AppState { foo: String::from("{ \"Success\": { } }") })
+            .service(api_index))
         .bind("127.0.0.1:8088")?
         .run()
         .await

@@ -79,7 +79,7 @@ async fn api_index(bytes: web::Bytes, data: web::Data<AppState>) -> impl Respond
         }
     };
 
-    println!("Response: {:?}", String::from_utf8(bytes.to_vec()));
+    println!("Response: {:?}", String::from_utf8(msg.to_vec()));
     HttpResponse::Ok().body(msg)
 }
 

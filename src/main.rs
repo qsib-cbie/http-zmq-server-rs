@@ -1,6 +1,8 @@
 use actix_web::{web, http, App, HttpResponse, HttpServer, Responder};
 use actix_web::post;
 use actix_cors::Cors;
+use actix_web::middleware::Logger;
+use env_logger::Env;
 
 enum CliError {
     ZmqError(zmq::Error),
@@ -25,7 +27,7 @@ struct AppState {
 
 fn try_connect(zmq_ctx: &zmq::Context) -> Result<zmq::Socket, zmq::Error> {
     let zmq_req_dealer = zmq_ctx.socket(zmq::DEALER)?;
-    zmq_req_dealer.connect("tcp://ubuntu20:6000")?;
+    zmq_req_dealer.connect("tcp://0.0.0.0:6000")?;
     Ok(zmq_req_dealer)
 }
 
@@ -88,10 +90,15 @@ async fn api_index(bytes: web::Bytes, data: web::Data<AppState>) -> impl Respond
 #[actix_rt::main]
 async fn main() -> std::io::Result<()> {
     // Run an HTTP server
+    env_logger::from_env(Env::default().default_filter_or("debug")).init();
+
     HttpServer::new(|| App::new()
+            .wrap(Logger::default())
             .wrap(
                 Cors::new() // <- Construct CORS middleware builder
                   .allowed_origin("*")
+                  .allowed_origin("http://skin-hydration.herokuapp.com")
+                  .allowed_origin("http://skin-hydration.herokuapp.com/")
                   .allowed_origin("http://localhost:3000")
                   .allowed_methods(vec!["GET", "POST"])
                   .allowed_headers(vec![http::header::AUTHORIZATION, http::header::ACCEPT])
@@ -100,10 +107,10 @@ async fn main() -> std::io::Result<()> {
                   .finish())
             .data(AppState {
                 foo: String::from("{ \"Success\": { } }"),
-                always_foo: false,
+                always_foo: true,
              })
             .service(api_index))
-        .bind("127.0.0.1:8088")?
+        .bind("0.0.0.0:80")?
         .run()
         .await
 }

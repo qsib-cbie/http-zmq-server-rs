@@ -25,7 +25,7 @@ struct AppState {
 
 fn try_connect(zmq_ctx: &zmq::Context) -> Result<zmq::Socket, zmq::Error> {
     let zmq_req_dealer = zmq_ctx.socket(zmq::DEALER)?;
-    zmq_req_dealer.connect("tcp://ubuntu20:6000")?;
+    zmq_req_dealer.connect("tcp://0.0.0.0:6000")?;
     Ok(zmq_req_dealer)
 }
 
@@ -94,6 +94,9 @@ async fn main() -> std::io::Result<()> {
                   .allowed_origin("*")
                   .allowed_origin("http://localhost:3000")
                   .allowed_origin("http://localhost:5000")
+                  .allowed_origin("http://10.104.232.150:5000")
+                  .allowed_origin("http://10.105.185.49:5000")
+                  .allowed_origin("http://epidermal-actuators.surge.sh")
                   .allowed_methods(vec!["GET", "POST"])
                   .allowed_headers(vec![http::header::AUTHORIZATION, http::header::ACCEPT])
                   .allowed_header(http::header::CONTENT_TYPE)
@@ -104,7 +107,7 @@ async fn main() -> std::io::Result<()> {
                 always_foo: false,
              })
             .service(api_index))
-        .bind("127.0.0.1:8088")?
+        .bind("0.0.0.0:8088")?
         .run()
         .await
 }
